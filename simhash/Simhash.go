@@ -2,101 +2,137 @@ package simhash
 
 import (
 	"crypto/md5"
-	"hash"
+	"fmt"
 	"log/slog"
+	"math/big"
+	"os"
 	"regexp"
 	"strings"
 )
 
-type Simhash struct {
-	Value  uint64
-	F      int
-	FBytes int
-	Reg    *regexp.Regexp
-	Hash   hash.Hash
-	Log    *slog.Logger
-}
-
-func defaultHash() hash.Hash {
-	return md5.New()
-}
-
-func hashFunc(h hash.Hash, data []byte) []byte {
-	h.Reset()
-	h.Write(data)
-	return h.Sum(nil)
-}
+// TODO:BUILD BY TEXT and BUILD BY FEATURES (batches + go routines)
 
 var (
 	largeWeightCutoff = 50
-	batch_size        = 200
+	batchSize         = 200
 )
 
-func NewSimhash(value uint64, f int, reg *regexp.Regexp, hash hash.Hash, log *slog.Logger) *Simhash {
-	if f == 0 || f%8 != 0 {
+type HashFunc func([]byte) []byte
+
+func defaultHashFunc(data []byte) []byte {
+	hash := md5.Sum(data)
+	return hash[:]
+}
+
+type Simhash struct {
+	Value    *big.Int
+	F        int
+	FBytes   int
+	Reg      *regexp.Regexp
+	HashFunc HashFunc
+	Log      *slog.Logger
+}
+
+type NewSimhashOptions struct {
+	F        int
+	FBytes   int
+	Reg      *regexp.Regexp
+	HashFunc HashFunc
+	Log      *slog.Logger
+}
+
+func NewSimhash(value any, f int, regPattern string, hashFunc HashFunc, logger *slog.Logger) *Simhash {
+	if f%8 != 0 || f == 0 {
 		f = 64
-		log.Warn("INCORRECT f VALUE", "f", f)
-	}
-	fBytes := f / 8
-
-	if reg == nil {
-		reg = regexp.MustCompile(`[\w\p{Han}]+`)
-		log.Warn("INCORRECT reg VALUE", "reg", reg)
-	}
-	if hash == nil {
-		hash = defaultHash()
-		log.Warn("INCORRECT hash VALUE", "hash", hash)
+		fmt.Printf("f should not be 0 and divisible by 8\ngot:%d\n", f)
 	}
 
-	if log == nil {
-		log = slog.Default()
-		log.Warn("INCORRECT log VALUE", "log", log)
+	if hashFunc == nil {
+		hashFunc = defaultHashFunc
 	}
-	return &Simhash{Value: value, F: f, FBytes: fBytes, Reg: reg, Hash: hash, Log: log}
+
+	if logger == nil {
+		logger = slog.New(slog.NewTextHandler(os.Stdout, nil))
+	}
+
+	var reg *regexp.Regexp
+	var err error
+	if regPattern == "" {
+		reg = regexp.MustCompile(`[\p{Han}\p{L}\p{N}_]+`)
+	} else {
+		reg, err = regexp.Compile(regPattern)
+		if err != nil {
+			fmt.Printf("Invalid regex pattern, falling back to default:\n%s\n", err)
+			reg = regexp.MustCompile(`[\p{Han}\p{L}\p{N}_]+`)
+		}
+	}
+
+	s := &Simhash{
+		F:        f,
+		FBytes:   f / 8,
+		Reg:      reg,
+		HashFunc: hashFunc,
+		Log:      logger,
+		Value:    big.NewInt(0),
+	}
+
+	switch v := value.(type) {
+	case *Simhash:
+		s.Value.Set(v.Value)
+	case string:
+		return s.buildByText(v)
+	case map[string]int:
+		return s.buildByFeatures(v)
+	case []string:
+		features := make(map[string]int)
+		for _, feature := range v {
+			features[feature] = 1
+		}
+		return s.buildByFeatures(features)
+	case int64:
+		s.Value.SetInt64(v)
+	case *big.Int:
+		s.Value.Set(v)
+	default:
+		return nil
+	}
+
+	return s
 }
 
-func (s *Simhash) Equals(s2 Simhash) bool {
-	return s.Value == s2.Value
+func (s *Simhash) Equal(s2 *Simhash) bool {
+	return s.Value.Cmp(s2.Value) == 0
 }
 
-func (s *Simhash) Slide(content string, width int) []string {
-	if width <= 0 {
-		width = 4
-		s.Log.Warn("INCORRECT width VALUE", "width", width)
+func (s *Simhash) slide(content string, width int) []string {
+	if len(content) < width {
+		return []string{content}
 	}
 
-	runes := []rune(content)
-	n := len(runes)
-	count := n - width + 1
-
-	count = max(count, 1)
-
-	slideContent := make([]string, 0, count)
-	for i := range count {
-		end := i + width
-
-		end = min(end, n)
-		slice := string(runes[i:end])
-		slideContent = append(slideContent, slice)
+	result := make([]string, 0, len(content)-width+1)
+	for i := 0; i <= len(content)-width; i++ {
+		result = append(result, content[i:i+width])
 	}
-
-	return slideContent
+	return result
 }
 
-func (s *Simhash) Tokenise(content string) []string {
+func (s *Simhash) tokenize(content string) []string {
 	content = strings.ToLower(content)
 	matches := s.Reg.FindAllString(content, -1)
-	joined := strings.Join(matches, "")
-	return s.Slide(joined, 0)
+	content = strings.Join(matches, "")
+
+	return s.slide(content, 4)
 }
 
-func (s *Simhash) BuildByText(content string) {
-	features := s.Tokenise(content)
-	featuresMap := make(map[string]int)
-	for _, feat := range features {
-		featuresMap[feat]++
+func (s *Simhash) buildByText(content string) *Simhash {
+	features := s.tokenize(content)
+
+	featureMap := make(map[string]int)
+	for _, feature := range features {
+		featureMap[feature]++
 	}
-	s.BuildByFeatures(featuresMap)
+
+	return s.buildByFeatures(featureMap)
 }
 
 // from python implementation
@@ -125,123 +161,167 @@ func (s *Simhash) BuildByText(content string) {
 //
 // """
 
-func (s *Simhash) BuildByFeatures(features map[string]int) {
+// func (s *Simhash) buildByFeatures(features map[string]int) *Simhash {
+// 	v := make([]int, s.F)
+//
+// 	for feature, weight := range features {
+// 		hashBytes := s.HashFunc([]byte(feature))
+//
+// 		if len(hashBytes) > s.FBytes {
+// 			hashBytes = hashBytes[len(hashBytes)-s.FBytes:]
+// 		}
+//
+// 		for i := 0; i < len(hashBytes) && i < s.FBytes; i++ {
+// 			for j := range 8 {
+// 				bitIndex := i*8 + j
+// 				if bitIndex < s.F {
+// 					if hashBytes[i]&(1<<(7-j)) != 0 {
+// 						v[bitIndex] += weight
+// 					} else {
+// 						v[bitIndex] -= weight
+// 					}
+// 				}
+// 			}
+// 		}
+// 	}
+//
+// 	var result []byte
+// 	for i := 0; i < s.F; i += 8 {
+// 		var b byte
+// 		for j := 0; j < 8 && i+j < s.F; j++ {
+// 			if v[i+j] > 0 {
+// 				b |= 1 << (7 - j)
+// 			}
+// 		}
+// 		result = append(result, b)
+// 	}
+//
+// 	s.Value.SetBytes(result)
+// 	return s
+// }
+
+func (s *Simhash) buildByFeatures(features map[string]int) *Simhash {
 	sums := make([][]int, 0)
 	batch := make([][]byte, 0)
 	count := 0
-	w := 1
-	// truncateMask := 1<<s.f - 1
 
 	for feature, weight := range features {
-		skipBatch := false
+		skipBatch := weight > largeWeightCutoff
+		count += weight
 
-		if weight > largeWeightCutoff {
-			skipBatch = true
-		}
-
-		count += w
-		hashed := hashFunc(s.Hash, []byte(feature))
-		h := hashed[:len(hashed)-s.FBytes]
+		hashed := s.HashFunc([]byte(feature)) // full hash
+		h := hashed[len(hashed)-s.FBytes:]    // truncated hash
 
 		if skipBatch {
 			bitArray := bitArrayFromBytes(h)
-			for i := range bitArray {
-				bitArray[i] *= w
+			weightedArray := make([]int, len(bitArray))
+			for i, bit := range bitArray {
+				weightedArray[i] = bit * weight
 			}
-			sums = append(sums, bitArray)
+			sums = append(sums, weightedArray)
 		} else {
-			tempBatch := make([]byte, 0)
-			for i, val := range h {
-				tempBatch[i] = val * byte(w)
+			for range weight {
+				batch = append(batch, h)
 			}
-			batch = append(batch, tempBatch)
-			if len(batch) >= batch_size {
-				sums = append(sums, sumHashes(batch))
-				batch = nil
+
+			if len(batch) >= batchSize {
+				sums = append(sums, sumHashes(batch, s.F))
+				batch = make([][]byte, 0)
 			}
 		}
-	}
-	if batch != nil {
-		sums = append(sums, sumHashes(batch))
-	}
 
-	combinedSums := make([]int, s.F)
-	for _, sum := range sums {
-		for i := range s.F {
-			combinedSums[i] += sum[i]
+		if len(sums) >= batchSize {
+			sums = [][]int{sumHashesBytes(sums)}
 		}
 	}
 
-	threshold := float64(count) / 2
-	bitVector := make([]byte, s.FBytes)
-	for i := range s.F {
-		if float64(combinedSums[i]) > threshold {
-			byteIndex := i / 8
-			bitIndex := 7 - (i % 8) // big-endian bit order
-			bitVector[byteIndex] |= 1 << bitIndex
+	if len(batch) > 0 {
+		sums = append(sums, sumHashes(batch, s.F))
+	}
+
+	combinedSums := sumHashesBytes(sums)
+
+	// Bit thresholding
+	finalBits := make([]int, len(combinedSums))
+	for i, val := range combinedSums {
+		if val > count/2 {
+			finalBits[i] = 1
 		}
 	}
 
-	// convert bytes to uint64 (assuming s.f <= 64)
-	s.Value = bytesToInt(bitVector)
+	s.Value.SetBytes(packBits(finalBits))
+	return s
 }
 
-func sumHashes(batch [][]byte) []int {
-	if len(batch) == 0 {
+func bitArrayFromBytes(hash []byte) []int {
+	bitArray := make([]int, 0, len(hash)*8)
+	for _, b := range hash {
+		for i := 7; i >= 0; i-- {
+			bit := (b >> i) & 1
+			bitArray = append(bitArray, int(bit))
+		}
+	}
+	return bitArray
+}
+
+func sumHashes(digests [][]byte, f int) []int {
+	bitMatrix := make([][]int, len(digests))
+	for i, d := range digests {
+		bitMatrix[i] = bitArrayFromBytes(d)
+	}
+	summed := make([]int, f)
+	for _, bits := range bitMatrix {
+		for i := 0; i < f; i++ {
+			summed[i] += bits[i]
+		}
+	}
+	return summed
+}
+
+func sumHashesBytes(sums [][]int) []int {
+	if len(sums) == 0 {
 		return nil
 	}
-	length := len(batch[0]) * 8
-	sums := make([]int, length)
-
-	for _, hashBytes := range batch {
-		bits := bitArrayFromBytes(hashBytes)
-		for i := range length {
-			sums[i] += bits[i]
+	f := len(sums[0])
+	total := make([]int, f)
+	for _, row := range sums {
+		for i := 0; i < f; i++ {
+			total[i] += row[i]
 		}
 	}
-	return sums
+	return total
 }
 
-func bitArrayFromBytes(b []byte) []int {
-	bits := make([]int, len(b)*8)
-	for i, by := range b {
-		for bit := range bits {
-			// Extract bit from left to right (big-endian bit order)
-			// bit 7 = highest bit, bit 0 = lowest bit
-			if (by & (1 << (7 - bit))) != 0 {
-				bits[i*8+bit] = 1
-			} else {
-				bits[i*8+bit] = 0
-			}
+func packBits(bits []int) []byte {
+	n := (len(bits) + 7) / 8
+	result := make([]byte, n)
+	for i, bit := range bits {
+		if bit != 0 {
+			byteIndex := i / 8
+			bitIndex := 7 - (i % 8)
+			result[byteIndex] |= 1 << bitIndex
 		}
 	}
-	return bits
+	return result
 }
 
-func (s *Simhash) distance(s2 *Simhash) float64 {
-	x := (s.Value ^ s2.Value) & ((1 << s.F) - 1)
-	ans := 0.0
-
-	for x > 0 {
-		ans++
-		x &= x - 1
+func (s *Simhash) Distance(other *Simhash) int {
+	if s.F != other.F {
+		panic("simhashes must have same dimensions")
 	}
-	return ans
-}
 
-func bytesToInt(b []byte) uint64 {
-	var val uint64 = 0
-	for i := range b {
-		val = (val << 8) | uint64(b[i])
-	}
-	return val
-}
+	xor := new(big.Int).Xor(s.Value, other.Value)
 
-func intToBytes(num uint64, length int) []byte {
-	b := make([]byte, length)
-	for i := length - 1; i >= 0; i-- {
-		b[i] = byte(num & 0xff)
-		num >>= 8
+	mask := new(big.Int).Lsh(big.NewInt(1), uint(s.F))
+	mask.Sub(mask, big.NewInt(1))
+	xor.And(xor, mask)
+
+	count := 0
+	for xor.Sign() > 0 {
+		count++
+		temp := new(big.Int).Sub(xor, big.NewInt(1))
+		xor.And(xor, temp)
 	}
-	return b
+
+	return count
 }
