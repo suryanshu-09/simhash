@@ -163,7 +163,7 @@ func TestSimhash(t *testing.T) {
 	})
 
 	t.Run("test large inputs", func(t *testing.T) {
-		batchSize := 200 // from our implementation
+		batchSize := 200
 		numFeatures := int(float64(batchSize) * 2.5)
 
 		var manyFeatures []string
@@ -179,7 +179,7 @@ func TestSimhash(t *testing.T) {
 
 		largeWeightFeatures := make(map[string]int)
 		for i, feature := range manyFeatures {
-			largeWeightFeatures[feature] = 50 * (i + 1) // large weights
+			largeWeightFeatures[feature] = 50 * (i + 1)
 		}
 
 		sh2 := s.NewSimhash(largeWeightFeatures, 64, "", nil, nil)
@@ -192,4 +192,37 @@ func TestSimhash(t *testing.T) {
 			t.Error("Different feature weightings should produce different simhashes")
 		}
 	})
+}
+
+func BenchmarkSimhash(b *testing.B) {
+	for b.Loop() {
+		batchSize := 200
+		numFeatures := int(float64(batchSize) * 2.5)
+
+		var manyFeatures []string
+		for i := range numFeatures {
+			manyFeatures = append(manyFeatures, strconv.Itoa(i))
+		}
+
+		sh := s.NewSimhash(manyFeatures, 64, "", nil, nil)
+
+		if sh.Value.Sign() == 0 {
+			b.Error("Simhash value should not be zero for many features")
+		}
+
+		largeWeightFeatures := make(map[string]int)
+		for i, feature := range manyFeatures {
+			largeWeightFeatures[feature] = 50 * (i + 1)
+		}
+
+		sh2 := s.NewSimhash(largeWeightFeatures, 64, "", nil, nil)
+
+		if sh2.Value.Sign() == 0 {
+			b.Error("Simhash value should not be zero for large weight features")
+		}
+
+		if sh.Equal(sh2) {
+			b.Error("Different feature weightings should produce different simhashes")
+		}
+	}
 }

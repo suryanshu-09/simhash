@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"os"
 	"regexp"
+	"runtime"
 	"strings"
 )
 
@@ -161,44 +162,61 @@ func (s *Simhash) buildByText(content string) *Simhash {
 //
 // """
 
-// func (s *Simhash) buildByFeatures(features map[string]int) *Simhash {
-// 	v := make([]int, s.F)
-//
-// 	for feature, weight := range features {
-// 		hashBytes := s.HashFunc([]byte(feature))
-//
-// 		if len(hashBytes) > s.FBytes {
-// 			hashBytes = hashBytes[len(hashBytes)-s.FBytes:]
-// 		}
-//
-// 		for i := 0; i < len(hashBytes) && i < s.FBytes; i++ {
-// 			for j := range 8 {
-// 				bitIndex := i*8 + j
-// 				if bitIndex < s.F {
-// 					if hashBytes[i]&(1<<(7-j)) != 0 {
-// 						v[bitIndex] += weight
-// 					} else {
-// 						v[bitIndex] -= weight
-// 					}
-// 				}
-// 			}
-// 		}
-// 	}
-//
-// 	var result []byte
-// 	for i := 0; i < s.F; i += 8 {
-// 		var b byte
-// 		for j := 0; j < 8 && i+j < s.F; j++ {
-// 			if v[i+j] > 0 {
-// 				b |= 1 << (7 - j)
-// 			}
-// 		}
-// 		result = append(result, b)
-// 	}
-//
-// 	s.Value.SetBytes(result)
-// 	return s
-// }
+func (s *Simhash) buildByFeaturesConcurrent(features map[string]int) *Simhash {
+	type task struct {
+		feature string
+		weight  int
+	}
+	type result struct {
+		weighted []int
+	}
+
+	numWorkers := runtime.NumCPU()
+	taskCh := make(chan task, len(features))
+	resultCh := make(chan result, len(features))
+
+	for range numWorkers {
+		go func() {
+			for t := range taskCh {
+				hashed := s.HashFunc([]byte(t.feature))
+				h := hashed[len(hashed)-s.FBytes:]
+				bits := bitArrayFromBytes(h)
+
+				weighted := make([]int, len(bits))
+				for i, b := range bits {
+					weighted[i] = b * t.weight
+				}
+				resultCh <- result{weighted: weighted}
+			}
+		}()
+	}
+
+	totalWeight := 0
+	for feature, weight := range features {
+		taskCh <- task{feature: feature, weight: weight}
+		totalWeight += weight
+	}
+	close(taskCh)
+
+	sums := make([][]int, 0, len(features))
+	for range len(features) {
+		r := <-resultCh
+		sums = append(sums, r.weighted)
+	}
+	close(resultCh)
+
+	combinedSums := sumHashesBytes(sums)
+
+	finalBits := make([]int, len(combinedSums))
+	for i, v := range combinedSums {
+		if v > totalWeight/2 {
+			finalBits[i] = 1
+		}
+	}
+
+	s.Value.SetBytes(packBits(finalBits))
+	return s
+}
 
 func (s *Simhash) buildByFeatures(features map[string]int) *Simhash {
 	sums := make([][]int, 0)
@@ -271,7 +289,7 @@ func sumHashes(digests [][]byte, f int) []int {
 	}
 	summed := make([]int, f)
 	for _, bits := range bitMatrix {
-		for i := 0; i < f; i++ {
+		for i := range f {
 			summed[i] += bits[i]
 		}
 	}
@@ -285,7 +303,7 @@ func sumHashesBytes(sums [][]int) []int {
 	f := len(sums[0])
 	total := make([]int, f)
 	for _, row := range sums {
-		for i := 0; i < f; i++ {
+		for i := range f {
 			total[i] += row[i]
 		}
 	}
