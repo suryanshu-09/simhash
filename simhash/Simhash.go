@@ -10,8 +10,6 @@ import (
 	"strings"
 )
 
-// TODO: Simhash Index
-
 type HashFunc func([]byte) []byte
 
 func defaultHashFunc(data []byte) []byte {
