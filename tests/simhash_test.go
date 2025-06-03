@@ -194,35 +194,64 @@ func TestSimhash(t *testing.T) {
 	})
 }
 
-func BenchmarkSimhash(b *testing.B) {
-	for b.Loop() {
-		batchSize := 10000
-		numFeatures := int(float64(batchSize) * 100)
-
-		var manyFeatures []string
-		for i := range numFeatures {
-			manyFeatures = append(manyFeatures, strconv.Itoa(i))
-		}
-
-		sh := s.NewSimhash(manyFeatures)
-
-		if sh.Value.Sign() == 0 {
-			b.Error("Simhash value should not be zero for many features")
-		}
-
-		largeWeightFeatures := make(map[string]int)
-		for i, feature := range manyFeatures {
-			largeWeightFeatures[feature] = 50 * (i + 1)
-		}
-
-		sh2 := s.NewSimhash(largeWeightFeatures)
-
-		if sh2.Value.Sign() == 0 {
-			b.Error("Simhash value should not be zero for large weight features")
-		}
-
-		if sh.Equal(sh2) {
-			b.Error("Different feature weightings should produce different simhashes")
-		}
+func TestSimhashIndex(t *testing.T) {
+	data := []string{
+		"How are you? I Am fine. blar blar blar blar blar Thanks.",
+		"How are you i am fine. blar blar blar blar blar than",
+		"This is simhash test.",
+		"How are you i am fine. blar blar blar blar blar thank1",
 	}
+
+	objs := make([]s.Object, 0, len(data))
+	for i, txt := range data {
+		objs = append(objs, s.Object{
+			ObjectId: strconv.Itoa(i + 1),
+			S:        s.NewSimhash(txt),
+		})
+	}
+
+	index := s.NewSimhashIndex(objs, s.SimhashIndexWithK(10))
+
+	t.Run("test get near duplicates", func(t *testing.T) {
+		s1 := s.NewSimhash("How are you i am fine.ablar ablar xyz blar blar blar blar blar blar blar thank")
+
+		t.Run("test duplicates", func(t *testing.T) {
+			dups := index.GetNearDups(s1)
+			if len(dups) != 3 {
+				t.Errorf("Expected 3 duplicates, got %d: %v", len(dups), dups)
+			}
+		})
+
+		t.Run("test delete duplicate", func(t *testing.T) {
+			index.Delete(s.Object{ObjectId: "1", S: s.NewSimhash(data[0])})
+			dups := index.GetNearDups(s1)
+			if len(dups) != 2 {
+				t.Errorf("After deleting ID=1, expected 2 duplicates, got %d: %v", len(dups), dups)
+			}
+		})
+
+		t.Run("test delete again", func(t *testing.T) {
+			index.Delete(s.Object{ObjectId: "1", S: s.NewSimhash(data[0])})
+			dups := index.GetNearDups(s1)
+			if len(dups) != 2 {
+				t.Errorf("After double delete, expected 2 duplicates, got %d: %v", len(dups), dups)
+			}
+		})
+
+		t.Run("test add again", func(t *testing.T) {
+			index.Add(s.Object{ObjectId: "1", S: s.NewSimhash(data[0])})
+			dups := index.GetNearDups(s1)
+			if len(dups) != 3 {
+				t.Errorf("After adding back ID=1, expected 3 duplicates, got %d: %v", len(dups), dups)
+			}
+		})
+
+		t.Run("test add again", func(t *testing.T) {
+			index.Add(s.Object{ObjectId: "1", S: s.NewSimhash(data[0])})
+			dups := index.GetNearDups(s1)
+			if len(dups) != 3 {
+				t.Errorf("After duplicate add, expected 3 duplicates, got %d: %v", len(dups), dups)
+			}
+		})
+	})
 }

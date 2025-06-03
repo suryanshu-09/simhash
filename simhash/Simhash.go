@@ -2,6 +2,7 @@ package simhash
 
 import (
 	"crypto/md5"
+	"fmt"
 	"log/slog"
 	"math/big"
 	"os"
@@ -285,13 +286,6 @@ type Object struct {
 	S        *Simhash
 }
 
-type SimhashIndex struct {
-	Obj Object
-	F   int
-	K   int
-	Log *slog.Logger
-}
-
 type IndexOptions func(*SimhashIndex)
 
 func SimhashIndexWithF(f int) IndexOptions {
@@ -312,11 +306,128 @@ func SimhashIndexWithLog(log *slog.Logger) IndexOptions {
 	}
 }
 
-func NewSimhashIndex(objs Object, ixOpt ...IndexOptions) *SimhashIndex {
+type SimhashIndex struct {
+	K      int
+	F      int
+	Log    *slog.Logger
+	Bucket map[string]map[string]string
+}
+
+func NewSimhashIndex(objs []Object, ixOpt ...IndexOptions) *SimhashIndex {
 	s := &SimhashIndex{
-		K:   DefaultK,
-		F:   DefaultF,
-		Log: DefaultLogger,
+		K:      DefaultK,
+		F:      DefaultF,
+		Log:    DefaultLogger,
+		Bucket: map[string]map[string]string{},
 	}
+
+	for _, opt := range ixOpt {
+		opt(s)
+	}
+
+	for _, obj := range objs {
+		s.Add(obj)
+	}
+
 	return s
+}
+
+func (s *SimhashIndex) Add(obj Object) {
+	if obj.S == nil || obj.S.F != s.F {
+		return
+	}
+	val := fmt.Sprintf("%x,%s", obj.S.Value, obj.ObjectId)
+	for _, key := range s.GetKeys(obj.S) {
+		if s.Bucket[key] == nil {
+			s.Bucket[key] = make(map[string]string)
+		}
+		s.Bucket[key][val] = val
+	}
+}
+
+func (s *SimhashIndex) Delete(obj Object) {
+	if obj.S == nil || obj.S.F != s.F {
+		return
+	}
+	val := fmt.Sprintf("%x,%s", obj.S.Value, obj.ObjectId)
+	for _, key := range s.GetKeys(obj.S) {
+		if _, ok := s.Bucket[key]; ok {
+			delete(s.Bucket[key], val)
+			if len(s.Bucket[key]) == 0 {
+				delete(s.Bucket, key)
+			}
+		}
+	}
+}
+
+func (s *SimhashIndex) GetNearDups(simhash *Simhash) []string {
+	if simhash.F != s.F {
+		return nil
+	}
+
+	result := make(map[string]struct{})
+	for _, key := range s.GetKeys(simhash) {
+		for val := range s.Bucket[key] {
+			parts := strings.SplitN(val, ",", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			hexVal, objID := parts[0], parts[1]
+			hashVal := new(big.Int)
+			hashVal.SetString(hexVal, 16)
+
+			dup := &Simhash{Value: hashVal, F: s.F}
+			if simhash.Distance(dup) <= s.K {
+				result[objID] = struct{}{}
+			}
+		}
+	}
+
+	var ans []string
+	for id := range result {
+		ans = append(ans, id)
+	}
+	return ans
+}
+
+// from python implementation
+//
+// """
+// You may optimize this method according to <http://static.googleusercontent.com/media/research.google.com/en//pubs/archive/33026.pdf>
+// """
+func (s *SimhashIndex) GetKeys(sim *Simhash) []string {
+	offsets := s.Offsets()
+	keys := make([]string, 0, len(offsets))
+
+	for i, offset := range offsets {
+		var maskLen int
+		if i == len(offsets)-1 {
+			maskLen = s.F - offset
+		} else {
+			maskLen = offsets[i+1] - offset
+		}
+
+		mask := new(big.Int).Lsh(big.NewInt(1), uint(maskLen))
+		mask.Sub(mask, big.NewInt(1))
+
+		shifted := new(big.Int).Rsh(sim.Value, uint(offset))
+		c := new(big.Int).And(shifted, mask)
+
+		keys = append(keys, fmt.Sprintf("%x:%x", c, i))
+	}
+
+	return keys
+}
+
+func (s *SimhashIndex) Offsets() []int {
+	offsets := make([]int, s.K+1)
+	chunk := s.F / (s.K + 1)
+	for i := 0; i <= s.K; i++ {
+		offsets[i] = chunk * i
+	}
+	return offsets
+}
+
+func (s *SimhashIndex) BucketSize() int {
+	return len(s.Bucket)
 }
