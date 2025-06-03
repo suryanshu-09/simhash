@@ -6,7 +6,6 @@ import (
 	"math/big"
 	"os"
 	"regexp"
-	"runtime"
 	"strings"
 )
 
@@ -20,33 +19,31 @@ func defaultHashFunc(data []byte) []byte {
 }
 
 type Simhash struct {
-	Value      *big.Int
-	F          int
-	FBytes     int
-	Reg        *regexp.Regexp
-	HashFunc   HashFunc
-	Log        *slog.Logger
-	Concurrent bool
+	Value    *big.Int
+	F        int
+	FBytes   int
+	Reg      *regexp.Regexp
+	HashFunc HashFunc
+	Log      *slog.Logger
 }
 
 var (
-	DefaultF           = 64
-	DefaultHashFunc    = defaultHashFunc
-	DefaultConcurrency = false
-	DefaultLogger      = slog.New(slog.NewTextHandler(os.Stdout, nil))
-	batchSize          = 200
-	largeWeightCutoff  = 50
+	DefaultF          = 64
+	DefaultHashFunc   = defaultHashFunc
+	DefaultLogger     = slog.New(slog.NewTextHandler(os.Stdout, nil))
+	batchSize         = 200
+	largeWeightCutoff = 50
+	DefaultK          = 2
 )
 
 func NewSimhash(value any, options ...Option) *Simhash {
 	s := &Simhash{
-		F:          DefaultF,
-		FBytes:     DefaultF / 8,
-		HashFunc:   DefaultHashFunc,
-		Reg:        regexp.MustCompile(`[\p{Han}\p{L}\p{N}_]+`),
-		Log:        DefaultLogger,
-		Concurrent: DefaultConcurrency,
-		Value:      big.NewInt(0),
+		F:        DefaultF,
+		FBytes:   DefaultF / 8,
+		HashFunc: DefaultHashFunc,
+		Reg:      regexp.MustCompile(`[\p{Han}\p{L}\p{N}_]+`),
+		Log:      DefaultLogger,
+		Value:    big.NewInt(0),
 	}
 
 	for _, opt := range options {
@@ -65,17 +62,11 @@ func NewSimhash(value any, options ...Option) *Simhash {
 	case string:
 		return s.buildByText(v)
 	case map[string]int:
-		if s.Concurrent {
-			return s.buildByFeaturesConcurrent(v)
-		}
 		return s.buildByFeatures(v)
 	case []string:
 		features := make(map[string]int)
 		for _, feature := range v {
 			features[feature] = 1
-		}
-		if s.Concurrent {
-			return s.buildByFeaturesConcurrent(features)
 		}
 		return s.buildByFeatures(features)
 	case int64:
@@ -90,12 +81,6 @@ func NewSimhash(value any, options ...Option) *Simhash {
 }
 
 type Option func(*Simhash)
-
-func WithConcurrency(c bool) Option {
-	return func(s *Simhash) {
-		s.Concurrent = c
-	}
-}
 
 func WithF(f int) Option {
 	return func(s *Simhash) {
@@ -157,9 +142,6 @@ func (s *Simhash) buildByText(content string) *Simhash {
 		featureMap[feature]++
 	}
 
-	if s.Concurrent {
-		return s.buildByFeaturesConcurrent(featureMap)
-	}
 	return s.buildByFeatures(featureMap)
 }
 
@@ -172,62 +154,6 @@ func (s *Simhash) buildByText(content string) *Simhash {
 //	a token -> weight dict.
 // """
 // Don't need it since our newSimhash func already handles various input types for value
-
-func (s *Simhash) buildByFeaturesConcurrent(features map[string]int) *Simhash {
-	type task struct {
-		feature string
-		weight  int
-	}
-	type result struct {
-		weighted []int
-	}
-
-	numWorkers := runtime.NumCPU()
-	taskCh := make(chan task, len(features))
-	resultCh := make(chan result, len(features))
-
-	for range numWorkers {
-		go func() {
-			for t := range taskCh {
-				hashed := s.HashFunc([]byte(t.feature))
-				h := hashed[len(hashed)-s.FBytes:]
-				bits := bitArrayFromBytes(h)
-
-				weighted := make([]int, len(bits))
-				for i, b := range bits {
-					weighted[i] = b * t.weight
-				}
-				resultCh <- result{weighted: weighted}
-			}
-		}()
-	}
-
-	totalWeight := 0
-	for feature, weight := range features {
-		taskCh <- task{feature: feature, weight: weight}
-		totalWeight += weight
-	}
-	close(taskCh)
-
-	sums := make([][]int, 0, len(features))
-	for range len(features) {
-		r := <-resultCh
-		sums = append(sums, r.weighted)
-	}
-	close(resultCh)
-
-	combinedSums := sumHashesBytes(sums)
-
-	finalBits := make([]int, len(combinedSums))
-	for i, v := range combinedSums {
-		if v > totalWeight/2 {
-			finalBits[i] = 1
-		}
-	}
-
-	s.Value.SetBytes(packBits(finalBits))
-	return s
-}
 
 func (s *Simhash) buildByFeatures(features map[string]int) *Simhash {
 	sums := make([][]int, 0)
@@ -352,4 +278,45 @@ func (s *Simhash) Distance(other *Simhash) int {
 	}
 
 	return count
+}
+
+type Object struct {
+	ObjectId string
+	S        *Simhash
+}
+
+type SimhashIndex struct {
+	Obj Object
+	F   int
+	K   int
+	Log *slog.Logger
+}
+
+type IndexOptions func(*SimhashIndex)
+
+func SimhashIndexWithF(f int) IndexOptions {
+	return func(s *SimhashIndex) {
+		s.F = f
+	}
+}
+
+func SimhashIndexWithK(k int) IndexOptions {
+	return func(s *SimhashIndex) {
+		s.K = k
+	}
+}
+
+func SimhashIndexWithLog(log *slog.Logger) IndexOptions {
+	return func(s *SimhashIndex) {
+		s.Log = log
+	}
+}
+
+func NewSimhashIndex(objs Object, ixOpt ...IndexOptions) *SimhashIndex {
+	s := &SimhashIndex{
+		K:   DefaultK,
+		F:   DefaultF,
+		Log: DefaultLogger,
+	}
+	return s
 }

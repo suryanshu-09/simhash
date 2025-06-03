@@ -31,7 +31,7 @@ func TestSimhash(t *testing.T) {
 		t.Run("large num", func(t *testing.T) {
 			largeNum := new(big.Int)
 			largeNum.SetString("9223372036854775808", 10)
-			sh := s.NewSimhash(largeNum, s.WithF(54))
+			sh := s.NewSimhash(largeNum)
 			if sh.Value.Cmp(largeNum) != 0 {
 				t.Errorf("Expected %s, got %s", largeNum.String(), sh.Value.String())
 			}
@@ -196,8 +196,8 @@ func TestSimhash(t *testing.T) {
 
 func BenchmarkSimhash(b *testing.B) {
 	for b.Loop() {
-		batchSize := 200
-		numFeatures := int(float64(batchSize) * 2.5)
+		batchSize := 10000
+		numFeatures := int(float64(batchSize) * 100)
 
 		var manyFeatures []string
 		for i := range numFeatures {
