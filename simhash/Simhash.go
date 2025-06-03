@@ -2,7 +2,6 @@ package simhash
 
 import (
 	"crypto/md5"
-	"fmt"
 	"log/slog"
 	"math/big"
 	"os"
@@ -11,12 +10,7 @@ import (
 	"strings"
 )
 
-// TODO:BUILD BY TEXT and BUILD BY FEATURES (batches + go routines)
-
-var (
-	largeWeightCutoff = 50
-	batchSize         = 200
-)
+// TODO: Simhash Index
 
 type HashFunc func([]byte) []byte
 
@@ -26,55 +20,43 @@ func defaultHashFunc(data []byte) []byte {
 }
 
 type Simhash struct {
-	Value    *big.Int
-	F        int
-	FBytes   int
-	Reg      *regexp.Regexp
-	HashFunc HashFunc
-	Log      *slog.Logger
+	Value      *big.Int
+	F          int
+	FBytes     int
+	Reg        *regexp.Regexp
+	HashFunc   HashFunc
+	Log        *slog.Logger
+	Concurrent bool
 }
 
-type NewSimhashOptions struct {
-	F        int
-	FBytes   int
-	Reg      *regexp.Regexp
-	HashFunc HashFunc
-	Log      *slog.Logger
-}
+var (
+	DefaultF           = 64
+	DefaultHashFunc    = defaultHashFunc
+	DefaultConcurrency = false
+	DefaultLogger      = slog.New(slog.NewTextHandler(os.Stdout, nil))
+	batchSize          = 200
+	largeWeightCutoff  = 50
+)
 
-func NewSimhash(value any, f int, regPattern string, hashFunc HashFunc, logger *slog.Logger) *Simhash {
-	if f%8 != 0 || f == 0 {
-		f = 64
-		fmt.Printf("f should not be 0 and divisible by 8\ngot:%d\n", f)
-	}
-
-	if hashFunc == nil {
-		hashFunc = defaultHashFunc
-	}
-
-	if logger == nil {
-		logger = slog.New(slog.NewTextHandler(os.Stdout, nil))
-	}
-
-	var reg *regexp.Regexp
-	var err error
-	if regPattern == "" {
-		reg = regexp.MustCompile(`[\p{Han}\p{L}\p{N}_]+`)
-	} else {
-		reg, err = regexp.Compile(regPattern)
-		if err != nil {
-			fmt.Printf("Invalid regex pattern, falling back to default:\n%s\n", err)
-			reg = regexp.MustCompile(`[\p{Han}\p{L}\p{N}_]+`)
-		}
-	}
-
+func NewSimhash(value any, options ...Option) *Simhash {
 	s := &Simhash{
-		F:        f,
-		FBytes:   f / 8,
-		Reg:      reg,
-		HashFunc: hashFunc,
-		Log:      logger,
-		Value:    big.NewInt(0),
+		F:          DefaultF,
+		FBytes:     DefaultF / 8,
+		HashFunc:   DefaultHashFunc,
+		Reg:        regexp.MustCompile(`[\p{Han}\p{L}\p{N}_]+`),
+		Log:        DefaultLogger,
+		Concurrent: DefaultConcurrency,
+		Value:      big.NewInt(0),
+	}
+
+	for _, opt := range options {
+		opt(s)
+	}
+
+	if s.F%8 != 0 || s.F == 0 {
+		s.Log.Error("f should be a multiple of 8 and not zero\ngot", "f:", s.F)
+		s.F = DefaultF
+		s.FBytes = s.F / 8
 	}
 
 	switch v := value.(type) {
@@ -83,11 +65,17 @@ func NewSimhash(value any, f int, regPattern string, hashFunc HashFunc, logger *
 	case string:
 		return s.buildByText(v)
 	case map[string]int:
+		if s.Concurrent {
+			return s.buildByFeaturesConcurrent(v)
+		}
 		return s.buildByFeatures(v)
 	case []string:
 		features := make(map[string]int)
 		for _, feature := range v {
 			features[feature] = 1
+		}
+		if s.Concurrent {
+			return s.buildByFeaturesConcurrent(features)
 		}
 		return s.buildByFeatures(features)
 	case int64:
@@ -99,6 +87,42 @@ func NewSimhash(value any, f int, regPattern string, hashFunc HashFunc, logger *
 	}
 
 	return s
+}
+
+type Option func(*Simhash)
+
+func WithConcurrency(c bool) Option {
+	return func(s *Simhash) {
+		s.Concurrent = c
+	}
+}
+
+func WithF(f int) Option {
+	return func(s *Simhash) {
+		s.F = f
+		s.FBytes = f / 8
+	}
+}
+
+func WithHashFunc(hashFunc func([]byte) []byte) Option {
+	return func(s *Simhash) {
+		s.HashFunc = hashFunc
+	}
+}
+
+func WithRegexPattern(pattern string) Option {
+	if pattern != "" {
+		return func(s *Simhash) {
+			s.Reg = regexp.MustCompile(pattern)
+		}
+	}
+	panic("incorrect regex pattern")
+}
+
+func WithLogger(log *slog.Logger) Option {
+	return func(s *Simhash) {
+		s.Log = log
+	}
 }
 
 func (s *Simhash) Equal(s2 *Simhash) bool {
@@ -133,6 +157,9 @@ func (s *Simhash) buildByText(content string) *Simhash {
 		featureMap[feature]++
 	}
 
+	if s.Concurrent {
+		return s.buildByFeaturesConcurrent(featureMap)
+	}
 	return s.buildByFeatures(featureMap)
 }
 
@@ -143,24 +170,8 @@ func (s *Simhash) buildByText(content string) *Simhash {
 //
 //	will be assumed), a list of (token, weight) tuples or
 //	a token -> weight dict.
-//
-// NO NEED SINCE THE FUNCTION IMPLEMENTATION ONLY RETURNS map[string]int
-//
-// IF STILL NEED DEFINE AN INTERFACE LIKE
-// type buildByFeaturesInterface interface{
-// ~[]string | ~ map[string]int | featureStruct
-// }
-//
-//	type featureStruct struct{
-//		token []string
-//		weight []int
-//	}
-//
-//	AND DO TYPE CHECKING IN THE FUNCTION LIKE:
-//
-//	switch v := any(features).(type)
-//
 // """
+// Don't need it since our newSimhash func already handles various input types for value
 
 func (s *Simhash) buildByFeaturesConcurrent(features map[string]int) *Simhash {
 	type task struct {
@@ -227,8 +238,8 @@ func (s *Simhash) buildByFeatures(features map[string]int) *Simhash {
 		skipBatch := weight > largeWeightCutoff
 		count += weight
 
-		hashed := s.HashFunc([]byte(feature)) // full hash
-		h := hashed[len(hashed)-s.FBytes:]    // truncated hash
+		hashed := s.HashFunc([]byte(feature))
+		h := hashed[len(hashed)-s.FBytes:]
 
 		if skipBatch {
 			bitArray := bitArrayFromBytes(h)
@@ -259,7 +270,6 @@ func (s *Simhash) buildByFeatures(features map[string]int) *Simhash {
 
 	combinedSums := sumHashesBytes(sums)
 
-	// Bit thresholding
 	finalBits := make([]int, len(combinedSums))
 	for i, val := range combinedSums {
 		if val > count/2 {

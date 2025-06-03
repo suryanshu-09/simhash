@@ -22,7 +22,7 @@ func TestSimhash(t *testing.T) {
 			}
 
 			for _, test := range tests {
-				sh := s.NewSimhash(test.input, 64, "", nil, nil)
+				sh := s.NewSimhash(test.input)
 				if sh.Value.Int64() != test.expected {
 					t.Errorf("Expected %d, got %d", test.expected, sh.Value.Int64())
 				}
@@ -31,7 +31,7 @@ func TestSimhash(t *testing.T) {
 		t.Run("large num", func(t *testing.T) {
 			largeNum := new(big.Int)
 			largeNum.SetString("9223372036854775808", 10)
-			sh := s.NewSimhash(largeNum, 64, "", nil, nil)
+			sh := s.NewSimhash(largeNum, s.WithF(54))
 			if sh.Value.Cmp(largeNum) != 0 {
 				t.Errorf("Expected %s, got %s", largeNum.String(), sh.Value.String())
 			}
@@ -40,13 +40,13 @@ func TestSimhash(t *testing.T) {
 
 	t.Run("test value", func(t *testing.T) {
 		features := []string{"aaa", "bbb"}
-		sh := s.NewSimhash(features, 64, "", nil, nil)
+		sh := s.NewSimhash(features)
 
 		if sh.Value.Sign() == 0 {
 			t.Error("Simhash value should not be zero for non-empty features")
 		}
 
-		sh2 := s.NewSimhash(features, 64, "", nil, nil)
+		sh2 := s.NewSimhash(features)
 
 		if sh.Value.Cmp(sh2.Value) != 0 {
 			t.Error("Same input should produce same simhash value")
@@ -54,24 +54,24 @@ func TestSimhash(t *testing.T) {
 	})
 
 	t.Run("testing distance", func(t *testing.T) {
-		sh := s.NewSimhash("How are you? I AM fine. Thanks. And you?", 64, "", nil, nil)
+		sh := s.NewSimhash("How are you? I AM fine. Thanks. And you?")
 
-		sh2 := s.NewSimhash("How old are you ? :-) i am fine. Thanks. And you?", 64, "", nil, nil)
+		sh2 := s.NewSimhash("How old are you ? :-) i am fine. Thanks. And you?")
 
 		distance := sh.Distance(sh2)
 		if distance == 0 {
 			t.Error("Distance should be greater than 0 for different texts")
 		}
 
-		sh3 := s.NewSimhash(sh2, 64, "", nil, nil)
+		sh3 := s.NewSimhash(sh2)
 
 		if sh2.Distance(sh3) != 0 {
 			t.Error("Distance should be 0 for identical simhashes")
 		}
 
-		sh4 := s.NewSimhash("1", 64, "", nil, nil)
+		sh4 := s.NewSimhash("1")
 
-		sh5 := s.NewSimhash("2", 64, "", nil, nil)
+		sh5 := s.NewSimhash("2")
 
 		if sh4.Distance(sh5) == 0 {
 			t.Error("Distance should not be 0 for different strings")
@@ -79,15 +79,15 @@ func TestSimhash(t *testing.T) {
 	})
 
 	t.Run("testing chinese", func(t *testing.T) {
-		sh1 := s.NewSimhash("你好　世界！　　呼噜。", 64, "", nil, nil)
+		sh1 := s.NewSimhash("你好　世界！　　呼噜。")
 
-		sh2 := s.NewSimhash("你好，世界　呼噜", 64, "", nil, nil)
+		sh2 := s.NewSimhash("你好，世界　呼噜")
 
-		sh4 := s.NewSimhash("How are you? I Am fine. ablar ablar xyz blar blar blar blar blar blar blar Thanks.", 64, "", nil, nil)
+		sh4 := s.NewSimhash("How are you? I Am fine. ablar ablar xyz blar blar blar blar blar blar blar Thanks.")
 
-		sh5 := s.NewSimhash("How are you i am fine.ablar ablar xyz blar blar blar blar blar blar blar than", 64, "", nil, nil)
+		sh5 := s.NewSimhash("How are you i am fine.ablar ablar xyz blar blar blar blar blar blar blar than")
 
-		sh6 := s.NewSimhash("How are you i am fine.ablar ablar xyz blar blar blar blar blar blar blar thank", 64, "", nil, nil)
+		sh6 := s.NewSimhash("How are you i am fine.ablar ablar xyz blar blar blar blar blar blar blar thank")
 
 		chineseDistance := sh1.Distance(sh2)
 		t.Logf("Chinese distance: %d", chineseDistance)
@@ -106,7 +106,7 @@ func TestSimhash(t *testing.T) {
 		var simhashes []*big.Int
 
 		for _, text := range texts {
-			sh := s.NewSimhash(text, 64, "", nil, nil)
+			sh := s.NewSimhash(text)
 			simhashes = append(simhashes, new(big.Int).Set(sh.Value))
 		}
 
@@ -120,11 +120,11 @@ func TestSimhash(t *testing.T) {
 	})
 
 	t.Run("test equality comparison", func(t *testing.T) {
-		a := s.NewSimhash("My name is John", 64, "", nil, nil)
+		a := s.NewSimhash("My name is John")
 
-		b := s.NewSimhash("My name is John", 64, "", nil, nil)
+		b := s.NewSimhash("My name is John")
 
-		c := s.NewSimhash("My name actually is Jane", 64, "", nil, nil)
+		c := s.NewSimhash("My name actually is Jane")
 
 		if !a.Equal(b) {
 			t.Error("A should equal B")
@@ -147,11 +147,11 @@ func TestSimhash(t *testing.T) {
 			return hash[:]
 		}
 
-		a := s.NewSimhash("My name is John", 64, "", nil, nil)
+		a := s.NewSimhash("My name is John")
 
-		b := s.NewSimhash("My name is John", 64, "", intHashFunc, nil)
+		b := s.NewSimhash("My name is John", s.WithHashFunc(intHashFunc))
 
-		c := s.NewSimhash("My name is John", 64, "", shaHashFunc, nil)
+		c := s.NewSimhash("My name is John", s.WithHashFunc(shaHashFunc))
 
 		t.Logf("Default hash: %x", a.Value)
 		t.Logf("Int hash: %x", b.Value)
@@ -171,7 +171,7 @@ func TestSimhash(t *testing.T) {
 			manyFeatures = append(manyFeatures, strconv.Itoa(i))
 		}
 
-		sh := s.NewSimhash(manyFeatures, 64, "", nil, nil)
+		sh := s.NewSimhash(manyFeatures)
 
 		if sh.Value.Sign() == 0 {
 			t.Error("Simhash value should not be zero for many features")
@@ -182,7 +182,7 @@ func TestSimhash(t *testing.T) {
 			largeWeightFeatures[feature] = 50 * (i + 1)
 		}
 
-		sh2 := s.NewSimhash(largeWeightFeatures, 64, "", nil, nil)
+		sh2 := s.NewSimhash(largeWeightFeatures)
 
 		if sh2.Value.Sign() == 0 {
 			t.Error("Simhash value should not be zero for large weight features")
@@ -204,7 +204,7 @@ func BenchmarkSimhash(b *testing.B) {
 			manyFeatures = append(manyFeatures, strconv.Itoa(i))
 		}
 
-		sh := s.NewSimhash(manyFeatures, 64, "", nil, nil)
+		sh := s.NewSimhash(manyFeatures)
 
 		if sh.Value.Sign() == 0 {
 			b.Error("Simhash value should not be zero for many features")
@@ -215,7 +215,7 @@ func BenchmarkSimhash(b *testing.B) {
 			largeWeightFeatures[feature] = 50 * (i + 1)
 		}
 
-		sh2 := s.NewSimhash(largeWeightFeatures, 64, "", nil, nil)
+		sh2 := s.NewSimhash(largeWeightFeatures)
 
 		if sh2.Value.Sign() == 0 {
 			b.Error("Simhash value should not be zero for large weight features")
