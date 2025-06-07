@@ -12,7 +12,7 @@ import (
 
 type HashFunc func([]byte) []byte
 
-func defaultHashFunc(data []byte) []byte {
+func defaultHashFunction(data []byte) []byte {
 	hash := md5.Sum(data)
 	return hash[:]
 }
@@ -27,21 +27,30 @@ type Simhash struct {
 }
 
 var (
-	DefaultF          = 64
-	DefaultHashFunc   = defaultHashFunc
-	DefaultLogger     = slog.New(slog.NewTextHandler(os.Stdout, nil))
+	defaultF          = 64
+	defaultHashFunc   = defaultHashFunction
+	defaultLogger     = slog.New(slog.NewTextHandler(os.Stdout, nil))
 	batchSize         = 200
 	largeWeightCutoff = 50
-	DefaultK          = 2
+	defaultK          = 2
 )
 
+// Takes in:
+// string - then builds by text (slide then tokenise and then build by features)
+// map[string]int - already tokenised
+// int64 or big.Int - initialise with a value
+// Or optional values:
+// F - dimension of fingerprints, default 64
+// HashFunc - default md5 func([]byte)[]byte
+// reg - is meaningful only when `value` is basestring and describes what is considered to be a letter inside parsed string
+// logger
 func NewSimhash(value any, options ...Option) *Simhash {
 	s := &Simhash{
-		F:        DefaultF,
-		FBytes:   DefaultF / 8,
-		HashFunc: DefaultHashFunc,
+		F:        defaultF,
+		FBytes:   defaultF / 8,
+		HashFunc: defaultHashFunc,
 		Reg:      regexp.MustCompile(`[\p{Han}\p{L}\p{N}_]+`),
-		Log:      DefaultLogger,
+		Log:      defaultLogger,
 		Value:    big.NewInt(0),
 	}
 
@@ -51,7 +60,7 @@ func NewSimhash(value any, options ...Option) *Simhash {
 
 	if s.F%8 != 0 || s.F == 0 {
 		s.Log.Error("f should be a multiple of 8 and not zero\ngot", "f:", s.F)
-		s.F = DefaultF
+		s.F = defaultF
 		s.FBytes = s.F / 8
 	}
 
@@ -258,6 +267,7 @@ func packBits(bits []int) []byte {
 	return result
 }
 
+// Find the distance between two simhashes
 func (s *Simhash) Distance(other *Simhash) int {
 	if s.F != other.F {
 		panic("simhashes must have same dimensions")
@@ -279,6 +289,12 @@ func (s *Simhash) Distance(other *Simhash) int {
 	return count
 }
 
+// """
+// `objs` is a list of (obj_id, simhash)
+// obj_id is a string, simhash is an instance of Simhash
+// `f` is the same with the one for Simhash
+// `k` is the tolerance
+// """
 type Object struct {
 	ObjectId string
 	S        *Simhash
@@ -313,9 +329,9 @@ type SimhashIndex struct {
 
 func NewSimhashIndex(objs []Object, ixOpt ...IndexOptions) *SimhashIndex {
 	s := &SimhashIndex{
-		K:      DefaultK,
-		F:      DefaultF,
-		Log:    DefaultLogger,
+		K:      defaultK,
+		F:      defaultF,
+		Log:    defaultLogger,
 		Bucket: map[string]map[string]string{},
 	}
 
