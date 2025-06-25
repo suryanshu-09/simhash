@@ -4,7 +4,7 @@
 
 Written for [we-go-wayback](https://github.com/suryanshu-09/we-go-wayback): a golang rewrite of [wayback-discover-diff](https://github.com/internetarchive/wayback-discover-diff).
 
-<p align="center">
+<p align="left">
   <a href="https://github.com/suryanshu-09/simhash/tags"><img src="https://img.shields.io/github/v/tag/suryanshu-09/simhash.svg" alt="Latest Tag"></a>
   <a href="https://pkg.go.dev/github.com/suryanshu-09/simhash"><img src="https://godoc.org/github.com/golang/gddo?status.svg" alt="Go Docs"></a>
   <a href="https://github.com/suryanshu-09/simhash/actions"><img src="https://github.com/charmbracelet/vhs/workflows/build/badge.svg" alt="Build Status"></a>
